@@ -80,12 +80,28 @@ kubectl apply -R -f k8s/
 make release VERSION=v2
 ```
 
-Terminal 2 stays all `200`. Two settings do that work:
+The manifests are deliberately minimal, so this relies on Kubernetes' defaults: the default
+`RollingUpdate` strategy (`maxSurge: 25%`, `maxUnavailable: 25%`) replaces pods a batch at a time
+rather than all at once, and `version` flips from 1 to 2 as it goes.
 
-- `maxUnavailable: 0` with `maxSurge: 1` — a new pod comes up *before* an old one goes away, so
-  ready replicas never dip below 3.
-- the `readinessProbe` on `/healthz` — the Service only sends traffic to a pod once it answers, so
-  a still-booting pod (notably the JVM) never receives a request.
+Expect a few non-200s in terminal 2 during the roll, though — with no `readinessProbe` the Service
+starts routing to a pod the moment its container process exists, before it is listening. Making the
+update genuinely seamless takes two additions to `k8s/<lang>/deployment.yaml`:
+
+```yaml
+      strategy:
+        rollingUpdate:
+          maxSurge: 1
+          maxUnavailable: 0        # never dip below `replicas` ready pods
+# ...and on the container:
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 2   # 5 for the java app — the JVM boots slower
+            periodSeconds: 5
+```
+
+The readiness probe is the part that matters: it holds a pod out of the Service until `/healthz`
+answers.
 
 Roll back:
 
@@ -108,9 +124,12 @@ make restart               # kubectl rollout restart — pods pick up the new va
 
 - **The Java image uses a JDK base (~450 MB), not a JRE.** `CMD ["java", "App.java"]` runs the
   single-file source launcher (JEP 330), which needs a compiler at runtime but removes Maven,
-  `javac`, and a multi-stage build entirely. Its probe timings in
-  `k8s/java/deployment.yaml` are looser to cover the compile-on-boot delay. Switch to a
-  multi-stage `javac` → `eclipse-temurin:25-jre` build if image size or start time starts to matter.
+  `javac`, and a multi-stage build entirely. Switch to a multi-stage `javac` →
+  `eclipse-temurin:25-jre` build if image size or start time starts to matter.
+- **The Deployments are minimal on purpose** — replicas, image, port, env, nothing else. No probes,
+  no resource requests/limits, no `securityContext`, no explicit rollout strategy. Add them when you
+  need what they buy: probes for seamless rollouts (see Demo 3), requests/limits before scheduling
+  on a shared cluster, `runAsNonRoot` + `runAsUser: 1000` to stop the containers running as root.
 - **The three manifest sets are copies, not templates.** Three apps × three files is small enough
   that Helm or kustomize would add more to read than it removes. Add an overlay when there is a
   second environment to vary.
