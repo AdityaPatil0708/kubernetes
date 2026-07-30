@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: java-app
+  labels:
+    app: java-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: java-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      # Zero-downtime: never let ready replicas drop below `replicas`.
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: java-app
+    spec:
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        # Numeric uid is required: kubelet cannot prove a username like `appuser`
+        # is non-root, and refuses to start the pod without this.
+        runAsUser: 1000
+      containers:
+        - name: java-app
+          image: k8s-demo/java-app:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: java-app-config
+          # Probe timings are looser than the node/python apps: the single-file
+          # source launcher compiles App.java on every start, so the JVM needs a
+          # few seconds before it serves.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

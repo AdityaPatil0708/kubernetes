@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node-app
+  labels:
+    app: node-app
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: node-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      # Zero-downtime: never let ready replicas drop below `replicas`.
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: node-app
+    spec:
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        # Numeric uid is required: kubelet cannot prove a username like `node`
+        # is non-root, and refuses to start the pod without this.
+        runAsUser: 1000
+      containers:
+        - name: node-app
+          image: k8s-demo/node-app:v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: node-app-config
+          # Readiness is what actually makes the rolling update seamless: traffic
+          # only reaches a new pod once it answers /healthz.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
